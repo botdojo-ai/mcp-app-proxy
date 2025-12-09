@@ -10,7 +10,7 @@ import {
 
 const DEFAULT_SANDBOX = 'allow-scripts allow-same-origin';
 const DEFAULT_CSP =
-  "default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src *; media-src 'self' data: blob:; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'";
+  "default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src *; media-src 'self' data: blob:; frame-src *; object-src 'none'; base-uri 'self'; form-action 'none'";
 
 function escapeHtmlAttr(value: string): string {
   return value
@@ -90,15 +90,28 @@ export default function SandboxProxyPage() {
         const data: any = event.data;
         if (data && data.method === 'ui/notifications/sandbox-resource-ready') {
           const { html, sandbox, resource, csp } = data.params || {};
+          console.log('[mcp-proxy] 📨 Received sandbox-resource-ready');
+          console.log('[mcp-proxy] 📨 Expected resource (from URL):', resourceUrl);
+          console.log('[mcp-proxy] 📨 Received resource (from response):', resource);
+          console.log('[mcp-proxy] 📨 HTML length:', html?.length);
+          // Check for distinctive content to identify which bundle
+          const hasProductCard = html?.includes('Loading product...');
+          const hasCheckout = html?.includes('Loading checkout...');
+          console.log('[mcp-proxy] 📨 HTML contains "Loading product...":', hasProductCard);
+          console.log('[mcp-proxy] 📨 HTML contains "Loading checkout...":', hasCheckout);
           const sandboxValue = typeof sandbox === 'string' && sandbox.trim() ? sandbox : DEFAULT_SANDBOX;
           inner.setAttribute('sandbox', sandboxValue);
           if (typeof html === 'string') {
             const safeHtml = ensureCspMeta(html, csp || DEFAULT_CSP, true);
             inner.srcdoc = safeHtml;
-            const cacheKey = typeof resource === 'string' ? `${cacheNamespace}::${resource}` : namespacedKey;
-            if (cacheKey) {
+            // Use the resource URI from the response (or fall back to URL param)
+            const resourceForCache = typeof resource === 'string' ? resource : resourceUrl;
+            const cacheKey = resourceForCache ? `${cacheNamespace}::${resourceForCache}` : null;
+            console.log('[mcp-proxy] 📨 Caching with key:', cacheKey);
+            if (cacheKey && resourceForCache) {
               setCachedHtml(cacheKey, safeHtml);
-              void persistCachedHtmlToApi(cacheKey, safeHtml, cacheNamespace);
+              // Pass resource WITHOUT namespace - buildCachePath adds namespace
+              void persistCachedHtmlToApi(resourceForCache, safeHtml, cacheNamespace);
             }
           }
         } else if (inner.contentWindow) {
@@ -110,20 +123,8 @@ export default function SandboxProxyPage() {
     };
 
     window.addEventListener('message', handleMessage);
-    // Advertise readiness to the parent so it can send HTML.
-    window.parent?.postMessage(
-      {
-        jsonrpc: '2.0',
-        method: 'ui/notifications/sandbox-ready',
-        params: {
-          flowId: flowId || undefined,
-          resource: resourceUrl || undefined,
-        },
-      },
-      '*',
-    );
-
-    // Check if URL is HTTP(S) - if so, fetch directly; otherwise use RPC chain
+    
+    // Check if URL is HTTP(S)
     const isHttpUrl = (uri: string): boolean => {
       try {
         const url = new URL(uri);
@@ -133,70 +134,79 @@ export default function SandboxProxyPage() {
       }
     };
 
-    // Try local + server-side cache first; if missing, fetch directly or ask parent for HTML.
-    const primeIframeFromCache = async () => {
-      if (!resourceUrl || !namespacedKey) return false;
-
-      // Skip cache if URL contains cache_buster
-      if (resourceUrl.includes('cache_buster')) {
-        return false;
-      }
-
-      const inMemory = getCachedHtml(namespacedKey);
-      if (inMemory) {
-        inner.srcdoc = ensureCspMeta(inMemory, DEFAULT_CSP);
-        return true;
-      }
-
-      const cachedHtml = await fetchCachedHtmlFromApi(resourceUrl, cacheNamespace);
-      if (cachedHtml) {
-        setCachedHtml(namespacedKey, cachedHtml);
-        inner.srcdoc = ensureCspMeta(cachedHtml, DEFAULT_CSP);
-        return true;
-      }
-
-      return false;
-    };
-
-    void primeIframeFromCache().then(async (found) => {
-      if (!resourceUrl || found) return;
-
-      // For HTTP(S) URLs, fetch directly from the proxy
-      if (isHttpUrl(resourceUrl)) {
-        try {
-          console.log('[mcp-proxy] Fetching HTTP(S) URL directly:', resourceUrl);
-          const response = await fetch(resourceUrl);
-          if (!response.ok) {
-            console.error('[mcp-proxy] Failed to fetch URL:', response.statusText);
-            return;
-          }
-          const html = await response.text();
-          const safeHtml = ensureCspMeta(html, DEFAULT_CSP);
-          inner.srcdoc = safeHtml;
-          if (namespacedKey) {
-            setCachedHtml(namespacedKey, safeHtml);
-            void persistCachedHtmlToApi(resourceUrl, safeHtml, cacheNamespace);
-          }
-          console.log('[mcp-proxy] Successfully fetched and cached HTML');
-        } catch (error) {
-          console.error('[mcp-proxy] Error fetching URL:', error);
-        }
-        return;
-      }
-
-      // For non-HTTP(S) URLs (app://, mcp://, etc.), use RPC chain
+    // For ALL HTTP(S) URLs (including localhost), just set iframe.src directly
+    // No fetching, no caching - let the browser handle it natively
+    if (resourceUrl && isHttpUrl(resourceUrl)) {
+      console.log('[mcp-proxy] Using HTTP(S) URL directly in iframe src:', resourceUrl);
+      inner.src = resourceUrl;
+      // Advertise readiness to the parent (for message forwarding)
       window.parent?.postMessage(
         {
           jsonrpc: '2.0',
-          method: 'ui/requests/sandbox-resource',
+          method: 'ui/notifications/sandbox-ready',
           params: {
             flowId: flowId || undefined,
-            resource: resourceUrl,
+            resource: resourceUrl || undefined,
           },
         },
         '*',
       );
-    });
+    } else {
+      // For non-HTTP(S) URLs (app://, mcp://, etc.), use cache + RPC chain
+      // Advertise readiness to the parent so it can send HTML.
+      window.parent?.postMessage(
+        {
+          jsonrpc: '2.0',
+          method: 'ui/notifications/sandbox-ready',
+          params: {
+            flowId: flowId || undefined,
+            resource: resourceUrl || undefined,
+          },
+        },
+        '*',
+      );
+
+      const primeIframeFromCache = async () => {
+        if (!resourceUrl || !namespacedKey) return false;
+
+        // Skip cache if URL contains cache_buster
+        if (resourceUrl.includes('cache_buster')) {
+          return false;
+        }
+
+        const inMemory = getCachedHtml(namespacedKey);
+        if (inMemory) {
+          inner.srcdoc = ensureCspMeta(inMemory, DEFAULT_CSP);
+          return true;
+        }
+
+        const cachedHtml = await fetchCachedHtmlFromApi(resourceUrl, cacheNamespace);
+        if (cachedHtml) {
+          setCachedHtml(namespacedKey, cachedHtml);
+          inner.srcdoc = ensureCspMeta(cachedHtml, DEFAULT_CSP);
+          return true;
+        }
+
+        return false;
+      };
+
+      void primeIframeFromCache().then(async (found) => {
+        if (!resourceUrl || found) return;
+
+        // For non-HTTP(S) URLs (app://, mcp://, etc.), use RPC chain
+        window.parent?.postMessage(
+          {
+            jsonrpc: '2.0',
+            method: 'ui/requests/sandbox-resource',
+            params: {
+              flowId: flowId || undefined,
+              resource: resourceUrl,
+            },
+          },
+          '*',
+        );
+      });
+    }
 
     return () => {
       window.removeEventListener('message', handleMessage);
