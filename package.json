@@ -1,6 +1,6 @@
 {
   "name": "mcp-app-proxy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Proxy server for hosting MCP Apps (SEP-1865) in iframes. Built by BotDojo.",
   "author": "BotDojo <hello@botdojo.com> (https://botdojo.com)",
   "license": "MIT",
