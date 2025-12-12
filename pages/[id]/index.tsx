@@ -226,8 +226,7 @@ export default function SandboxProxyPage() {
       <Head>
         <title>MCP App HTML Proxy</title>
         <meta charSet="utf-8" />
-        {/* Default CSP for the proxy shell (inner iframe gets its own CSP injected) */}
-        <meta httpEquiv="Content-Security-Policy" content={DEFAULT_CSP} />
+        {/* No CSP for proxy shell - inner iframe has its own CSP injected via srcdoc */}
         <style>{`
           html, body, #__next {
             margin: 0;
