@@ -85,42 +85,59 @@ export default function SandboxProxyPage() {
     inner.setAttribute('sandbox', DEFAULT_SANDBOX);
     container.appendChild(inner);
 
+    // Queue messages until inner iframe is ready to receive them
+    let innerReady = false;
+    const pendingMessages: any[] = [];
+    
+    const forwardToInner = (data: any) => {
+      if (innerReady && inner.contentWindow) {
+        inner.contentWindow.postMessage(data, '*');
+      } else {
+        // Queue message until inner iframe is ready
+        pendingMessages.push(data);
+      }
+    };
+    
+    const flushPendingMessages = () => {
+      if (!inner.contentWindow) return;
+      innerReady = true;
+      while (pendingMessages.length > 0) {
+        const msg = pendingMessages.shift();
+        inner.contentWindow.postMessage(msg, '*');
+      }
+    };
+    
+    // Listen for inner iframe load event
+    inner.addEventListener('load', () => {
+      console.log('[mcp-proxy] Inner iframe loaded, flushing pending messages:', pendingMessages.length);
+      flushPendingMessages();
+    });
+
     const handleMessage = (event: MessageEvent) => {
       if (event.source === window.parent) {
         const data: any = event.data;
         if (data && data.method === 'ui/notifications/sandbox-resource-ready') {
           const { html, sandbox, resource, csp } = data.params || {};
-          console.log('[mcp-proxy] 📨 Received sandbox-resource-ready');
-          console.log('[mcp-proxy] 📨 CSP received:', csp);
-          console.log('[mcp-proxy] 📨 CSP contains ngrok?:', csp?.includes('ngrok'));
-          console.log('[mcp-proxy] 📨 Expected resource (from URL):', resourceUrl);
-          console.log('[mcp-proxy] 📨 Received resource (from response):', resource);
-          console.log('[mcp-proxy] 📨 HTML length:', html?.length);
-          // Check for distinctive content to identify which bundle
-          const hasProductCard = html?.includes('Loading product...');
-          const hasCheckout = html?.includes('Loading checkout...');
-          console.log('[mcp-proxy] 📨 HTML contains "Loading product...":', hasProductCard);
-          console.log('[mcp-proxy] 📨 HTML contains "Loading checkout...":', hasCheckout);
           const sandboxValue = typeof sandbox === 'string' && sandbox.trim() ? sandbox : DEFAULT_SANDBOX;
           inner.setAttribute('sandbox', sandboxValue);
           if (typeof html === 'string') {
             const effectiveCsp = csp || DEFAULT_CSP;
-            console.log('[mcp-proxy] 📨 Effective CSP being applied:', effectiveCsp);
-            console.log('[mcp-proxy] 📨 Using custom CSP?:', !!csp);
             const safeHtml = ensureCspMeta(html, effectiveCsp, true);
+            // Reset ready state - srcdoc will trigger a new load
+            innerReady = false;
             inner.srcdoc = safeHtml;
             // Use the resource URI from the response (or fall back to URL param)
             const resourceForCache = typeof resource === 'string' ? resource : resourceUrl;
             const cacheKey = resourceForCache ? `${cacheNamespace}::${resourceForCache}` : null;
-            console.log('[mcp-proxy] 📨 Caching with key:', cacheKey);
             if (cacheKey && resourceForCache) {
               setCachedHtml(cacheKey, safeHtml);
               // Pass resource WITHOUT namespace - buildCachePath adds namespace
               void persistCachedHtmlToApi(resourceForCache, safeHtml, cacheNamespace);
             }
           }
-        } else if (inner.contentWindow) {
-          inner.contentWindow.postMessage(data, '*');
+        } else {
+          // Forward other messages to inner iframe (queue if not ready)
+          forwardToInner(data);
         }
       } else if (event.source === inner.contentWindow) {
         window.parent.postMessage(event.data, '*');
