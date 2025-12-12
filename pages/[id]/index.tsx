@@ -91,6 +91,8 @@ export default function SandboxProxyPage() {
         if (data && data.method === 'ui/notifications/sandbox-resource-ready') {
           const { html, sandbox, resource, csp } = data.params || {};
           console.log('[mcp-proxy] 📨 Received sandbox-resource-ready');
+          console.log('[mcp-proxy] 📨 CSP received:', csp);
+          console.log('[mcp-proxy] 📨 CSP contains ngrok?:', csp?.includes('ngrok'));
           console.log('[mcp-proxy] 📨 Expected resource (from URL):', resourceUrl);
           console.log('[mcp-proxy] 📨 Received resource (from response):', resource);
           console.log('[mcp-proxy] 📨 HTML length:', html?.length);
@@ -102,7 +104,10 @@ export default function SandboxProxyPage() {
           const sandboxValue = typeof sandbox === 'string' && sandbox.trim() ? sandbox : DEFAULT_SANDBOX;
           inner.setAttribute('sandbox', sandboxValue);
           if (typeof html === 'string') {
-            const safeHtml = ensureCspMeta(html, csp || DEFAULT_CSP, true);
+            const effectiveCsp = csp || DEFAULT_CSP;
+            console.log('[mcp-proxy] 📨 Effective CSP being applied:', effectiveCsp);
+            console.log('[mcp-proxy] 📨 Using custom CSP?:', !!csp);
+            const safeHtml = ensureCspMeta(html, effectiveCsp, true);
             inner.srcdoc = safeHtml;
             // Use the resource URI from the response (or fall back to URL param)
             const resourceForCache = typeof resource === 'string' ? resource : resourceUrl;
