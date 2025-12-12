@@ -107,13 +107,38 @@ export default function SandboxProxyPage() {
       }
     };
     
-    // Listen for inner iframe load event
+    // Listen for inner iframe load event (fallback timeout in case client-ready never arrives)
+    let flushTimeout: NodeJS.Timeout | null = null;
     inner.addEventListener('load', () => {
-      console.log('[mcp-proxy] Inner iframe loaded, flushing pending messages:', pendingMessages.length);
-      flushPendingMessages();
+      console.log('[mcp-proxy] Inner iframe loaded, waiting for client-ready signal. Pending messages:', pendingMessages.length);
+      // Fallback: flush after 500ms if client-ready never arrives (e.g., non-MCP app)
+      flushTimeout = setTimeout(() => {
+        if (!innerReady) {
+          console.log('[mcp-proxy] Fallback: flushing after timeout (client-ready not received)');
+          flushPendingMessages();
+        }
+      }, 500);
     });
 
     const handleMessage = (event: MessageEvent) => {
+      // Handle client-ready signal from inner iframe
+      if (event.source === inner.contentWindow) {
+        const data: any = event.data;
+        if (data && data.method === 'ui/notifications/client-ready') {
+          console.log('[mcp-proxy] Received client-ready from inner iframe, flushing messages:', pendingMessages.length);
+          if (flushTimeout) {
+            clearTimeout(flushTimeout);
+            flushTimeout = null;
+          }
+          flushPendingMessages();
+          // Don't forward client-ready to parent (it's proxy-internal)
+          return;
+        }
+        // Forward other messages from inner to parent
+        window.parent.postMessage(data, '*');
+        return;
+      }
+      
       if (event.source === window.parent) {
         const data: any = event.data;
         if (data && data.method === 'ui/notifications/sandbox-resource-ready') {
@@ -139,8 +164,6 @@ export default function SandboxProxyPage() {
           // Forward other messages to inner iframe (queue if not ready)
           forwardToInner(data);
         }
-      } else if (event.source === inner.contentWindow) {
-        window.parent.postMessage(event.data, '*');
       }
     };
 
