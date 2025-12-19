@@ -1,0 +1,37 @@
+{
+  "name": "mcp-app-proxy",
+  "version": "0.1.6",
+  "description": "Proxy server for hosting MCP Apps (SEP-1865) in iframes. Built by BotDojo.",
+  "author": "BotDojo <hello@botdojo.com> (https://botdojo.com)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/botdojo-ai/mcp-app-proxy"
+  },
+  "homepage": "https://github.com/botdojo-ai/mcp-app-proxy#readme",
+  "keywords": [
+    "mcp",
+    "mcp-apps",
+    "sep-1865",
+    "proxy",
+    "iframe",
+    "model-context-protocol"
+  ],
+  "scripts": {
+    "dev": "next dev -p 9094",
+    "build": "next build",
+    "start": "next start -p 9094",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "^13.5.2",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "typescript": "^5.4.5"
+  }
+}
