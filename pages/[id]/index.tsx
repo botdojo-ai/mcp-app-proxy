@@ -57,10 +57,12 @@ export default function SandboxProxyPage() {
   const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Get path param (id/flowId) and query param (url)
+  // Get path param (id/flowId) and query params (url, noCache)
   const flowId = typeof router.query.id === 'string' ? router.query.id : null;
   const resourceUrl =
     typeof router.query.url === 'string' ? router.query.url : null;
+  // Support both 'noCache' query param and _meta["botdojo/no-cache"] via the URL
+  const noCacheParam = router.query.noCache === 'true' || router.query.noCache === '1';
   const cacheNamespace = flowId || 'default';
   const namespacedKey = resourceUrl ? `${cacheNamespace}::${resourceUrl}` : null;
 
@@ -214,8 +216,8 @@ export default function SandboxProxyPage() {
       const primeIframeFromCache = async () => {
         if (!resourceUrl || !namespacedKey) return false;
 
-        // Skip cache if URL contains cache_buster
-        if (resourceUrl.includes('cache_buster')) {
+        // Skip cache if noCache query param is set or URL contains cache_buster (legacy)
+        if (noCacheParam || resourceUrl.includes('cache_buster')) {
           return false;
         }
 
@@ -259,7 +261,7 @@ export default function SandboxProxyPage() {
         inner.parentElement.removeChild(inner);
       }
     };
-  }, [router.isReady, flowId, resourceUrl]);
+  }, [router.isReady, flowId, resourceUrl, noCacheParam]);
 
   return (
     <>
