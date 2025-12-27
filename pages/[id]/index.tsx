@@ -87,6 +87,10 @@ export default function SandboxProxyPage() {
     inner.setAttribute('sandbox', DEFAULT_SANDBOX);
     container.appendChild(inner);
 
+    // Track if content has been loaded into inner iframe (from cache or host)
+    // This prevents duplicate loads when host sends sandbox-resource-ready after we loaded from cache
+    let contentLoaded = false;
+
     // Queue messages until inner iframe is ready to receive them
     let innerReady = false;
     const pendingMessages: any[] = [];
@@ -144,6 +148,11 @@ export default function SandboxProxyPage() {
       if (event.source === window.parent) {
         const data: any = event.data;
         if (data && data.method === 'ui/notifications/sandbox-resource-ready') {
+          // Skip if content already loaded (from cache) to prevent duplicate iframe reloads
+          if (contentLoaded) {
+            console.log('[mcp-proxy] Ignoring sandbox-resource-ready - content already loaded');
+            return;
+          }
           const { html, sandbox, resource, csp } = data.params || {};
           const sandboxValue = typeof sandbox === 'string' && sandbox.trim() ? sandbox : DEFAULT_SANDBOX;
           inner.setAttribute('sandbox', sandboxValue);
@@ -153,6 +162,7 @@ export default function SandboxProxyPage() {
             // Reset ready state - srcdoc will trigger a new load
             innerReady = false;
             inner.srcdoc = safeHtml;
+            contentLoaded = true;  // Mark as loaded to prevent duplicate loads
             // Use the resource URI from the response (or fall back to URL param)
             const resourceForCache = typeof resource === 'string' ? resource : resourceUrl;
             const cacheKey = resourceForCache ? `${cacheNamespace}::${resourceForCache}` : null;
@@ -200,20 +210,8 @@ export default function SandboxProxyPage() {
       );
     } else {
       // For non-HTTP(S) URLs (app://, mcp://, etc.), use cache + RPC chain
-      // Advertise readiness to the parent so it can send HTML.
-      window.parent?.postMessage(
-        {
-          jsonrpc: '2.0',
-          method: 'ui/notifications/sandbox-ready',
-          params: {
-            flowId: flowId || undefined,
-            resource: resourceUrl || undefined,
-          },
-        },
-        '*',
-      );
-
-      const primeIframeFromCache = async () => {
+      // Check cache FIRST, then send sandbox-ready with loadedFromCache flag
+      const primeIframeFromCache = async (): Promise<boolean> => {
         if (!resourceUrl || !namespacedKey) return false;
 
         // Skip cache if noCache query param is set or URL contains cache_buster (legacy)
@@ -224,6 +222,7 @@ export default function SandboxProxyPage() {
         const inMemory = getCachedHtml(namespacedKey);
         if (inMemory) {
           inner.srcdoc = ensureCspMeta(inMemory, DEFAULT_CSP);
+          contentLoaded = true;  // Mark as loaded from cache
           return true;
         }
 
@@ -231,23 +230,26 @@ export default function SandboxProxyPage() {
         if (cachedHtml) {
           setCachedHtml(namespacedKey, cachedHtml);
           inner.srcdoc = ensureCspMeta(cachedHtml, DEFAULT_CSP);
+          contentLoaded = true;  // Mark as loaded from cache
           return true;
         }
 
         return false;
       };
 
-      void primeIframeFromCache().then(async (found) => {
-        if (!resourceUrl || found) return;
-
-        // For non-HTTP(S) URLs (app://, mcp://, etc.), use RPC chain
+      // Check cache first, then send sandbox-ready with the result
+      void primeIframeFromCache().then((loadedFromCache) => {
+        // Send sandbox-ready with loadedFromCache flag
+        // If loadedFromCache=true, host should skip sending sandbox-resource-ready
+        // If loadedFromCache=false, host will send sandbox-resource-ready with HTML
         window.parent?.postMessage(
           {
             jsonrpc: '2.0',
-            method: 'ui/requests/sandbox-resource',
+            method: 'ui/notifications/sandbox-ready',
             params: {
               flowId: flowId || undefined,
-              resource: resourceUrl,
+              resource: resourceUrl || undefined,
+              loadedFromCache,  // Tell host if we already have content
             },
           },
           '*',
